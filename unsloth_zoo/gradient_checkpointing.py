@@ -222,8 +222,6 @@ def patch_unsloth_gradient_checkpointing():
     if torch.utils.checkpoint.checkpoint.__name__ == "unsloth_offloaded_gradient_checkpoint": return
     torch.utils.checkpoint._old_checkpoint = torch.utils.checkpoint.checkpoint
     torch.utils.checkpoint.checkpoint = unsloth_offloaded_gradient_checkpoint
-    import transformers.modeling_utils
-    transformers.modeling_utils.checkpoint = unsloth_offloaded_gradient_checkpoint
     os.environ["UNSLOTH_PATCHED"] = "1"
 pass
 
@@ -234,8 +232,6 @@ def patch_gradient_checkpointing():
     if torch.utils.checkpoint.checkpoint.__name__ == "unsloth_gradient_checkpoint": return
     torch.utils.checkpoint._old_checkpoint = torch.utils.checkpoint.checkpoint
     torch.utils.checkpoint.checkpoint = unsloth_gradient_checkpoint
-    import transformers.modeling_utils
-    transformers.modeling_utils.checkpoint = unsloth_gradient_checkpoint
     os.environ["UNSLOTH_PATCHED"] = "1"
 pass
 

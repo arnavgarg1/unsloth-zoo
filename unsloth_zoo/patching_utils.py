@@ -87,20 +87,7 @@ def patch_torch_compile(debug = True, O3 = False, ignore_errors = True):
         torch._logging.set_logs(dynamo = logging.CRITICAL, inductor = logging.CRITICAL)
         torch._dynamo.config.verbose = False
     pass
-    try:
-        print(f"🦥 Unsloth Zoo will now patch everything{DEBUGGING} to make training faster!")
-    except:
-        print(f"Unsloth Zoo will now patch everything{DEBUGGING} to make training faster!")
-    pass
-
     os.environ["UNSLOTH_PATCHED"] = "1"
-    # See https://pytorch.org/tutorials/recipes/torch_compile_caching_tutorial.html
-    # Caches kernel generations for faster restarts
-    # https://dev-discuss.pytorch.org/t/impact-of-multithreading-and-local-caching-on-torch-compile/2498/3
-    os.environ["TORCHINDUCTOR_FX_GRAPH_CACHE"] = "1"
-    os.environ["TORCHINDUCTOR_AUTOTUNE_REMOTE_CACHE"] = "1"
-    os.environ.pop("TORCHINDUCTOR_CACHE_DIR", None)
-    # os.environ["TORCHINDUCTOR_CACHE_DIR"] = UNSLOTH_COMPILE_LOCATION
 
     # Torch compile arguments
     torch_compile_arguments = [
@@ -153,6 +140,27 @@ def patch_torch_compile(debug = True, O3 = False, ignore_errors = True):
         try:    exec(_try_dynamo_argument)
         except: pass
     pass
+pass
+
+
+def patch_regional_compilation():
+    # Regional torch 2.5 Recompilation - weirdly very slow??
+    if torch.nn.ModuleList.__name__ == "UnslothModuleList": return
+    # Only works for torch 2.5
+    if Version(torch.__version__) < Version("2.5.0"): return
+
+    old_module_list = torch.nn.ModuleList
+    os.environ["UNSLOTH_PATCHED"] = "1"
+
+    def UnslothModuleList(*args, **kwargs):
+        if len(args) == 1 and len(kwargs) == 0 and type(args[0]) is list:
+            args = [old_module_list([torch.compile(x, dynamic = True, options = torch_compile_options, fullgraph = False) for x in args[0]])]
+        return old_module_list(*args, **kwargs)
+    pass
+    UnslothModuleList.__doc__ = old_module_list.__doc__
+
+    torch.nn.ModuleList = UnslothModuleList
+    return
 pass
 
 
