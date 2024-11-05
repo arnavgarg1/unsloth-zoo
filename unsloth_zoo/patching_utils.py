@@ -66,8 +66,7 @@ def patch_layernorm(fast_layernorm):
 pass
 
 
-def patch_torch_compile(debug = True, O3 = False, ignore_errors = True):
-    # Code licensed under LGPL
+def patch_torch_compile(debug = True, O3 = False, ignore_errors = False):
     assert(type(debug) is bool)
     assert(type(O3)    is bool)
     import os, logging
