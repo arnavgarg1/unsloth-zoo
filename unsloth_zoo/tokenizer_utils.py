@@ -251,7 +251,7 @@ def fix_untrained_tokens(model, tokenizer, train_dataset, IGNORED_TOKENIZER_NAME
     # Remove pad token possibility
     if hasattr(tokenizer, "pad_token_id"):
         pad_token_id = tokenizer.pad_token_id
-        if pad_token_id is not None and pad_token_id < indicator_untrained.shape[0]:
+        if pad_token_id < indicator_untrained.shape[0]:
             indicator_untrained[pad_token_id] = False
     pass
     
