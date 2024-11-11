@@ -67,7 +67,7 @@ def patch_torch_compile(debug = True, O3 = False, ignore_errors = True):
     import os, logging
 
     if debug:
-        DEBUGGING = " with debugging"
+        print("Unsloth: Torch.compile debugging turned on")
         os.environ["TORCHDYNAMO_VERBOSE"] = "1"
         os.environ["TORCH_LOGS"] = "dynamo,graph_breaks,recompiles,graph_code,aot_joint_graph,aot_graphs,compiled_autograd_verbose"
         os.environ["TORCHINDUCTOR_COMPILE_THREADS"] = "1"
@@ -124,11 +124,11 @@ def patch_torch_compile(debug = True, O3 = False, ignore_errors = True):
         "config.compiled_autograd = False", # New Torch 2.4 feature which can compile backwards passes
         # https://pytorch.org/tutorials/intermediate/compiled_autograd_tutorial.html
     ]
-    # import torch._inductor.config as config
-    # for _try_compile_argument in torch_compile_arguments:
-    #     try:    exec(_try_compile_argument)
-    #     except: pass
-    # pass
+    import torch._inductor.config as config
+    for _try_compile_argument in torch_compile_arguments:
+        try:    exec(_try_compile_argument)
+        except: pass
+    pass
     import torch._dynamo.config as config
     for _try_dynamo_argument in torch_dynamo_arguments:
         try:    exec(_try_dynamo_argument)
