@@ -105,7 +105,7 @@ def patch_torch_compile(debug = True, O3 = False, ignore_errors = True):
         # "config.combo_kernels = True", # Experimental - enable the combo kernel that combines data-independent kernels
         # "config.combo_kernel_foreach_dynamic_shapes = True",
         "config.freezing = False", # Freezes weights --> ** only useful for inference **
-        # f"config.triton.multi_kernel = {O3}", # use tuning to pick between different subkernels
+        f"config.triton.multi_kernel = {O3}", # use tuning to pick between different subkernels
         "config.cuda.enable_cuda_lto = True",
         "config.cuda.use_fast_math = True",
         "config.cuda.compile_opt_level = '-O1'",
