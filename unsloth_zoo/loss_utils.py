@@ -131,33 +131,6 @@ def post_patch_loss_function(model):
     return model
 pass
 
-
-def fused_linear_cross_entropy(
-    hidden_states      : torch.Tensor,
-    lm_weight          : torch.Tensor,
-    labels             : torch.Tensor,
-    num_items_in_batch : int = None,
-    ignore_index       : int = -100,
-    reduction          : str = "mean",
-    logit_softcapping  : float = 0,
-    accuracy_threshold : str = "auto",
-):
-    reduction = "sum" if num_items_in_batch is not None else "mean"
-    if logit_softcapping == 0: logit_softcapping = None
-    loss = linear_cross_entropy(
-        hidden_states,
-        lm_weight,
-        targets      = labels,
-        ignore_index = ignore_index,
-        softcap      = logit_softcapping,
-        reduction    = reduction,
-        shift        = True,
-        filter_eps   = accuracy_threshold,
-    )
-    if num_items_in_batch is not None: loss = loss / num_items_in_batch
-    return loss
-pass
-
 # Unsloth Zoo - Utilities for Unsloth
 # Copyright 2023-present Daniel Han-Chen & the Unsloth team. All rights reserved.
 #

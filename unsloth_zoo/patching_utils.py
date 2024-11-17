@@ -26,7 +26,7 @@ __all__ = [
 ]
 
 global UNSLOTH_COMPILE_LOCATION
-UNSLOTH_COMPILE_LOCATION = "unsloth_compiled_cache"
+from .patching_utils import UNSLOTH_COMPILE_LOCATION
 
 
 # Also disable compiling on bitsandbytes
@@ -310,7 +310,7 @@ def patch_compiled_autograd():
     source = "\n".join(x[spaces:] for x in source)
     old = "return compiled_fn(inputs, sizes, scalars, hooks)"
     n = len(re.search(r"\n([ ]{1,})return compiled_fn", source).group(1))
-    source = source.replace(old, f"with disable():\n{' '*(n + 4)}{old}")
+    source = source.replace(old, f"with disable():\n{' '*(n + 4)}{'print(1111111); '}{old}")
     source = source.replace("def end_capture", "def unsloth_end_capture", 1)
 
     # Import items to make the function executable
@@ -321,11 +321,8 @@ def patch_compiled_autograd():
     torch._dynamo.compiled_autograd.AutogradCompilerInstance.end_capture = unsloth_end_capture
 
     # From https://github.com/pytorch/pytorch/pull/135795/files
-    try:
-        import torch._dynamo.variables.misc
-        fx = torch._dynamo.variables.misc.AutogradEngineVariable.call_method
-    except:
-        return
+    import torch._dynamo.variables.misc
+    fx = torch._dynamo.variables.misc.AutogradEngineVariable.call_method
     if fx.__name__ == "unsloth_call_method": return
     source = inspect.getsource(fx)
     if "in_compiled_autograd_region" in source: return

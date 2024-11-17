@@ -17,11 +17,9 @@
 global CHECKPOINT_BUFFERS
 global CHECKPOINT_INDEX
 global MAX_CHECKPOINT_RANGE
-global CHECKPOINT_LOGGING
 CHECKPOINT_BUFFERS = []
 CHECKPOINT_INDEX = 0
 MAX_CHECKPOINT_RANGE = 1000
-CHECKPOINT_LOGGING = True
 
 import torch
 import numpy as np
@@ -259,14 +257,9 @@ pass
 
 
 def create_gradient_checkpointing_buffer(dtype = torch.float16):
-    # Code licensed under LGPL
     global CHECKPOINT_BUFFERS
     global CHECKPOINT_INDEX
     global MAX_CHECKPOINT_RANGE
-    global CHECKPOINT_LOGGING
-    CHECKPOINT_INDEX = 0
-    CHECKPOINT_BUFFERS = []
-    CHECKPOINT_LOGGING = True
     if len(CHECKPOINT_BUFFERS) != 0: return
 
     for _ in range(MAX_CHECKPOINT_RANGE):
@@ -288,8 +281,12 @@ from torch.utils.checkpoint import (
     contextlib,
 )
 class UnslothCheckpointFunction(torch.autograd.Function):
+    # Code licensed under LGPL
     @staticmethod
     def forward(ctx, run_function, preserve_rng_state, *args):
+        global CHECKPOINT_BUFFERS
+        global CHECKPOINT_INDEX
+
         check_backward_validity(args)
         ctx.run_function = run_function
         ctx.preserve_rng_state = preserve_rng_state
@@ -315,30 +312,38 @@ class UnslothCheckpointFunction(torch.autograd.Function):
         ctx.inputs = []
         ctx.tensor_indices = []
         tensor_inputs = []
-        if len(args) != 0:
-            arg = args[0]
+        done = False
+        for i, arg in enumerate(args):
             if torch.is_tensor(arg):
-                tensor_inputs.append(arg)
-                ctx.tensor_indices.append(0)
-                ctx.inputs.append(None)
-            else:
-                ctx.inputs.append(arg)
-        for i, arg in enumerate(args[1:], start = 1):
-            if torch.is_tensor(arg):
-                tensor_inputs.append(arg)
+                array = CHECKPOINT_BUFFERS[CHECKPOINT_INDEX]
+                if not done and arg.dtype == array.dtype:
+                    done = True
+                    old_size = array.numel()
+                    new_size = arg.numel()
+                    if new_size > old_size:
+                        CHECKPOINT_BUFFERS[CHECKPOINT_INDEX].resize_(new_size)
+                        array = CHECKPOINT_BUFFERS[CHECKPOINT_INDEX]
+                    array[:new_size].copy_(arg.ravel(), non_blocking = True)
+                    tensor_inputs.append(array[:new_size].view(arg.shape))
+                    CHECKPOINT_INDEX += 1
+                else:
+                    tensor_inputs.append(arg)
                 ctx.tensor_indices.append(i)
                 ctx.inputs.append(None)
+                done = True
             else:
                 ctx.inputs.append(arg)
-
-        ctx.save_for_backward(*tensor_inputs)
-
         with torch.no_grad():
             outputs = run_function(*args)
+
+        ctx.save_for_backward(*tensor_inputs)
         return outputs
+    pass
 
     @staticmethod
     def backward(ctx, *args):
+        # Code licensed under LGPL
+        global CHECKPOINT_INDEX
         if not torch.autograd._is_checkpoint_valid():
             raise RuntimeError(
                 "When use_reentrant=True, torch.utils.checkpoint is incompatible"
@@ -352,11 +357,13 @@ class UnslothCheckpointFunction(torch.autograd.Function):
         tensors = ctx.saved_tensors
 
         # Fill in inputs with appropriate saved tensors.
-        if len(tensor_indices) != 0:
-            inputs[tensor_indices[0]] = tensors[0].to("cuda:0", non_blocking = True)
-
-        for i, idx in enumerate(tensor_indices[1:], start = 1):
-            inputs[idx] = tensors[i].to("cuda:0", non_blocking = True)
+        for i, idx in enumerate(tensor_indices):
+            array = tensors[i]
+            if hasattr(array, "__UNSLOTH_BUFFER__"):
+                array = array.to("cuda:0", non_blocking = True)
+            inputs[idx] = array.detach()
+        pass
+        CHECKPOINT_INDEX = 0
 
         # Stash the surrounding rng state, and mimic the state that was
         # present at this time during forward.  Restore the surrounding state
@@ -371,7 +378,8 @@ class UnslothCheckpointFunction(torch.autograd.Function):
                 torch.set_rng_state(ctx.fwd_cpu_state)
                 if ctx.had_device_in_fwd:
                     set_device_states(ctx.fwd_devices, ctx.fwd_device_states, device_type=ctx.device_type)
-            detached_inputs = detach_variable(tuple(inputs))
+            # detached_inputs = detach_variable(tuple(inputs))
+            detached_inputs = inputs
 
             device_autocast_ctx = torch.amp.autocast(
                 device_type=ctx.device_type, **ctx.device_autocast_kwargs
@@ -390,19 +398,24 @@ class UnslothCheckpointFunction(torch.autograd.Function):
                 outputs_with_grad.append(outputs[i])
                 args_with_grad.append(args[i])
         if len(outputs_with_grad) == 0:
-            # raise RuntimeError(
-            #     "none of output has requires_grad=True,"
-            #     " this checkpoint() is not necessary"
-            # )
-            pass
-        else:
-            torch.autograd.backward(outputs_with_grad, args_with_grad)
+            raise RuntimeError(
+                "none of output has requires_grad=True,"
+                " this checkpoint() is not necessary"
+            )
+        torch.autograd.backward(outputs_with_grad, args_with_grad)
         grads = tuple(
             inp.grad if isinstance(inp, torch.Tensor) else None
             for inp in detached_inputs
         )
 
+        for i in range(len(detached_inputs)):
+            detached_inputs[i] = None
+            inputs[i] = None
+        del inputs
+        del detached_inputs
+
         return (None, None) + grads
+    pass
 pass
 
 
