@@ -109,8 +109,6 @@ def patch_torch_compile(debug = True, O3 = False, ignore_errors = True):
         "config.cuda.enable_cuda_lto = True",
         "config.cuda.use_fast_math = True",
         "config.cuda.compile_opt_level = '-O1'",
-        # Capture torch.arange(...), torch.zeros(...)
-        "config.capture_dynamic_output_shape_ops = True",
     ]
     # Torch dynamo arguments
     torch_dynamo_arguments = [
