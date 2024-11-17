@@ -25,7 +25,8 @@ __all__ = [
     "patch_compiled_autograd",
 ]
 
-from .compiler import UNSLOTH_COMPILE_LOCATION
+global UNSLOTH_COMPILE_LOCATION
+UNSLOTH_COMPILE_LOCATION = "unsloth_compiled_cache"
 
 
 # Also disable compiling on bitsandbytes
@@ -82,6 +83,11 @@ def patch_torch_compile(debug = True, O3 = False, ignore_errors = True):
         torch._dynamo.config.verbose = False
     pass
     os.environ["UNSLOTH_PATCHED"] = "1"
+    # See https://pytorch.org/tutorials/recipes/torch_compile_caching_tutorial.html
+    # Caches kernel generations for faster restarts
+    os.environ["TORCHINDUCTOR_FX_GRAPH_CACHE"] = "1"
+    os.environ["TORCHINDUCTOR_AUTOTUNE_REMOTE_CACHE"] = "1"
+    os.environ["TORCHINDUCTOR_CACHE_DIR"] = UNSLOTH_COMPILE_LOCATION
 
     # Torch compile arguments
     torch_compile_arguments = [
