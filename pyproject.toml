@@ -40,7 +40,6 @@ dependencies = [
     "huggingface_hub",
     "hf_transfer",
     "cut_cross_entropy",
-    "pillow",
 ]
 
 [tool.setuptools.dynamic]
