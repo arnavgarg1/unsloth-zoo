@@ -570,7 +570,7 @@ def patch_tokenizer(model, tokenizer):
             if hasattr(model.config, "max_position_embeddings"):
                 model.generation_config.update(max_length = model.config.max_position_embeddings)
     pass
-    
+
     return model, original_tokenizer
 pass
 
