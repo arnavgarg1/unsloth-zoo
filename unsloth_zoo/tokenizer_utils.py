@@ -531,7 +531,7 @@ def patch_tokenizer(model, tokenizer):
             if model is not None and \
                 hasattr(model.config, "vocab_size") and \
                 check_pad_token[0] >= model.config.vocab_size:
-                
+
                 possible_pad_token = None
         pass
 
@@ -570,7 +570,7 @@ def patch_tokenizer(model, tokenizer):
             if hasattr(model.config, "max_position_embeddings"):
                 model.generation_config.update(max_length = model.config.max_position_embeddings)
     pass
-
+    
     return model, original_tokenizer
 pass
 
