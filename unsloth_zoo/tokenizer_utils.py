@@ -531,7 +531,7 @@ def patch_tokenizer(model, tokenizer):
             if model is not None and \
                 hasattr(model.config, "vocab_size") and \
                 check_pad_token[0] >= model.config.vocab_size:
-
+                
                 possible_pad_token = None
         pass
 
