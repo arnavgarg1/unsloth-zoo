@@ -19,28 +19,12 @@ __all__ = [
     "patch_torch_functions",
 ]
 
-import os
-UNSLOTH_COMPILE_DEBUG = os.environ.get("UNSLOTH_COMPILE_DEBUG", "0") == "1"
-torch_compile_options = {
-    "epilogue_fusion"   : True,
-    "max_autotune"      : False,
-    "shape_padding"     : True,
-    "trace.enabled"     : UNSLOTH_COMPILE_DEBUG,
-    "triton.cudagraphs" : False,
-}
+torch_compile_options = {'epilogue_fusion': True, 'max_autotune': True, 'shape_padding': True, 'trace.enabled': False, 'triton.cudagraphs': False}
 from torch import Tensor
 import torch
 from torch.nn import functional as F
 from torch.nn import _reduction as _Reduction, grad
-from torch.nn.functional import (
-    handle_torch_function,
-    has_torch_function,
-    has_torch_function_variadic,
-    normalize, 
-    np,
-)
-from typing import Callable, List, Optional, Tuple, Union
-
+from torch.nn.functional import (List, Optional, Tensor, handle_torch_function, has_torch_function, has_torch_function_variadic, normalize, np)
 
 @torch.compile(fullgraph = True, dynamic = True, options = torch_compile_options)
 def layer_norm(
@@ -54,6 +38,7 @@ def layer_norm(
 
     See :class:`~torch.nn.LayerNorm` for details.
     """
+    print(1)
     if has_torch_function_variadic(input, weight, bias):
         return handle_torch_function(
             layer_norm,
@@ -146,6 +131,7 @@ def cross_entropy(
         >>> loss = F.cross_entropy(input, target)
         >>> loss.backward()
     """
+    print(2)
     if has_torch_function_variadic(input, target, weight):
         return handle_torch_function(
             cross_entropy,
