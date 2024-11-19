@@ -67,6 +67,7 @@ pass
 
 
 def patch_torch_compile(debug = True, O3 = False, ignore_errors = True):
+    # Code licensed under LGPL
     assert(type(debug) is bool)
     assert(type(O3)    is bool)
     import os, logging
