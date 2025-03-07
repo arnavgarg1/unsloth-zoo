@@ -1,6 +1,6 @@
 
 # Unsloth Zoo - Utilities for Unsloth
-# Copyright 2023-present Daniel Han-Chen & the Unsloth team. All rights reserved.
+# Copyright 2023-present Daniel Han-Chen, Michael Han-Chen & the Unsloth team. All rights reserved.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License as published by
@@ -173,6 +173,7 @@ pass
 
 
 def patch_torch_functions():
+    # All Unsloth Zoo code licensed under LGPLv3
     torch.nn.functional.layer_norm    = layer_norm
     torch.nn.functional.cross_entropy = cross_entropy
 pass

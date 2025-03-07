@@ -1,5 +1,5 @@
 # Unsloth Zoo - Utilities for Unsloth
-# Copyright 2023-present Daniel Han-Chen & the Unsloth team. All rights reserved.
+# Copyright 2023-present Daniel Han-Chen, Michael Han-Chen & the Unsloth team. All rights reserved.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License as published by
@@ -148,6 +148,17 @@ def _find_common_token_ids(component, tokenizer):
         if all(single_token in x for x in all_input_ids):
             substring = [single_token]
     pass
+
+    # Also if substring is original input_ids + [0], then leave it as the original one
+    # This happens when no newlines / spaces are used in chat template
+    # Eg Phi-4 does not use newlines or spaces
+    if (len(set(str(x) for x in all_input_ids)) == 1) and \
+        (len(all_input_ids[0]) + 1 == len(substring)) and \
+        (all_input_ids[0] == substring[:-1]):
+
+        # Use original un-changed substring
+        substring = all_input_ids[0]
+    pass
     
     # Also get rest of tokenized string
     original = tokenizer(component, add_special_tokens = False).input_ids
@@ -169,7 +180,7 @@ def train_on_responses_only(
     Trains only on responses and not on the instruction by masking out
     the labels with -100 for the instruction part.
     """
-    # Code licensed under LGPL
+    # All Unsloth Zoo code licensed under LGPLv3
     tokenizer = trainer.processing_class if hasattr(trainer, "processing_class") else trainer.tokenizer
     
     if  not hasattr(tokenizer, "_unsloth_input_part") or \
@@ -290,11 +301,15 @@ def train_on_responses_only(
             trainer.eval_dataset = trainer.eval_dataset.map(_train_on_responses_only, batched = True)
         pass
     pass
+
+    # Check if all labels randomnly got masked to nothing - maybe wrong chat template?
+    from .training_utils import fix_zero_training_loss
+    fix_zero_training_loss(None, tokenizer, trainer.train_dataset)
     return trainer
 pass
 
 # Unsloth Zoo - Utilities for Unsloth
-# Copyright 2023-present Daniel Han-Chen & the Unsloth team. All rights reserved.
+# Copyright 2023-present Daniel Han-Chen, Michael Han-Chen & the Unsloth team. All rights reserved.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License as published by

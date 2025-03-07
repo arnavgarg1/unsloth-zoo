@@ -1,5 +1,5 @@
 # Unsloth Zoo - Utilities for Unsloth
-# Copyright 2023-present Daniel Han-Chen & the Unsloth team. All rights reserved.
+# Copyright 2023-present Daniel Han-Chen, Michael Han-Chen & the Unsloth team. All rights reserved.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License as published by
@@ -17,10 +17,18 @@
 __all__ = [
     "get_peft_regex",
     "merge_and_overwrite_lora",
+    "merge_and_dequantize_lora",
     "SKIP_QUANTIZATION_MODULES",
+    "get_lora_layer_modules",
+    "requires_grad_for_gradient_checkpointing",
 ]
 
+import inspect
 import torch
+import os
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type, TypeVar, Union
+from collections import OrderedDict
+import re
 
 # Skip some modules sensitive to quantization
 SKIP_QUANTIZATION_MODULES = [
@@ -45,7 +53,7 @@ def get_peft_regex(
     """
     Create a regex pattern to apply LoRA to only select layers of a model.
     """
-    # Code licensed under LGPL
+    # All Unsloth Zoo code licensed under LGPLv3
     if not finetune_vision_layers and not finetune_language_layers:
         raise RuntimeError(
             "Unsloth: No layers to finetune - please select to finetune the vision and/or the language layers!"
@@ -56,7 +64,6 @@ def get_peft_regex(
         )
     pass
 
-    import re
     from collections import Counter
     # Get only linear layers
     modules = model.named_modules()
@@ -125,222 +132,176 @@ def get_peft_regex(
 pass
 
 
-from huggingface_hub import (
-    HfFileSystem,
-    snapshot_download,
-    hf_hub_download,
-)
-from safetensors import safe_open
-from safetensors.torch import save_file
-from collections import OrderedDict
-from tqdm import tqdm as ProgressBar
-import os, shutil
+def get_lora_layer_modules():
+    # All Unsloth Zoo code licensed under LGPLv3
+    import peft.tuners.lora
+    path = os.path.split(peft.tuners.lora.__file__)[0]
+    files = os.listdir(path)
 
-
-@torch.inference_mode
-def _merge_and_overwrite_lora(save_location, filename, lora_weights,):
-    # Code licensed under LGPL
-    # Merges LoRA and overwrites the safetensors file it was merged to
-    filename = os.path.join(save_location, filename)
-    tensors = OrderedDict()
-    with safe_open(filename, framework = "pt", device = "cpu") as file:
-        for key in file.keys():
-            W = file.get_tensor(key)
-            if key in lora_weights:
-                A, B, scaling = lora_weights[key]
-                old_dtype = W.dtype
-                W = W.to("cuda", dtype = torch.float32, non_blocking = True)
-
-                W = W.addmm_(B.to(torch.float32), A.to(torch.float32), alpha = scaling)
-
-                maximum_element = torch.max(W.min().abs(), W.max())
-                if not torch.isfinite(maximum_element).item():
-                    raise ValueError(f"Unsloth: Merge failed.\n{key} has some elements = infinity.")
-                W = W.to(old_dtype)
-            pass
-            tensors[key] = W
-        pass
+    Linear_LoRA_Layers = []
+    for file in files:
+        if file == "__init__.py" or not file.endswith(".py"): continue
+        item = f"peft.tuners.lora.{file[:-len('.py')]}"
+        exec(f"import {item}", locals(), globals())
+        modules = dir(eval(item))
+        modules = [x for x in modules if x.startswith("Linear") or x.endswith("Linear")]
+        if len(modules) == 0: continue
+        exec(f"from {item} import ({', '.join(modules)})", locals(), globals())
+        Linear_LoRA_Layers += [(eval(x), item, x,) for x in modules]
     pass
-    save_file(tensors, filename, metadata = {"format": "pt"})
+    return tuple(Linear_LoRA_Layers)
 pass
 
 
-@torch.inference_mode
-def merge_and_overwrite_lora(
-    get_model_name,
-    create_huggingface_repo,
-    model,
-    save_location        = "unsloth_finetuned_merge",
-    push_to_hub          = False,
-    token                = None,
-    upload_location      = None,
-    low_disk_space_usage = True,
-    private              = False,
-):
-    # Code licensed under LGPL
-    ignore_files = [
-        "*.gitattributes",
-        "*.md",
-        "special_tokens_map.json",
-        "tokenizer_config.json",
-        "tokenizer.json",
-        "tokenizer.model",
-    ]
-    model_name = get_model_name(model.config._name_or_path, load_in_4bit = False)
-    print(f"Unsloth: Merging QLoRA weights directly to the 16bit version of {model_name}.")
-
-    if push_to_hub and upload_location is None:
-        raise RuntimeError(
-            "Unsloth: You're trying to upload to a HuggingFace repo, but did not provide an `upload_location`. Please do!"
-        )
-    pass
-
-    if upload_location is not None:
-        upload_location, hf_api = create_huggingface_repo(
-            model = model,
-            save_directory = upload_location,
-            token = token,
-            private = private,
-        )
-    pass
-
-    # Find all LoRA A and B matrices
-    lora_weights = {}
-    for name, param in model.named_parameters():
-        if "lora_A" in name:
-            assert(name.startswith("base_model."))
-            name = name[len("base_model."):]
-            name = name.replace(".lora_A.default", "")
-            lora_weights[name] = [param, None, None,]
-        elif "lora_B" in name:
-            assert(name.startswith("base_model."))
-            name = name[len("base_model."):]
-            name = name.replace(".lora_B.default", "")
-            lora_weights[name][1] = param
+def requires_grad_for_gradient_checkpointing(model):
+    # All Unsloth Zoo code licensed under LGPLv3
+    # Enables requires_grad to make gradient checkpointing work on
+    # non language models that don't just use .embed_tokens
+    def register_other_hooks(name1, name2, module, _hooks):
+        old_hooks = eval(f"module.{_hooks}")
+        other_hooks = []
+        for value in old_hooks.values():
+            qualname = getattr(value, "__qualname__", "")
+            name     = getattr(value, "__name__", "")
+            if name1 in qualname or name2 in qualname: pass
+            elif name2 in name or name2 in name: pass
+            else: other_hooks.append(value)
+        pass
+        # Keep none input requires grad hooks
+        exec(f"module.{_hooks} = OrderedDict()")
+        for hook in other_hooks:
+            exec(f"module.register{_hooks[:-1]}(hook)")
         pass
     pass
 
-    # Confirm count
-    parameters = model.named_parameters()
-    total_counted = sum(".lora_A." in name or ".lora_B." in name for name, x in parameters)
-    if total_counted//2 != len(lora_weights):
-        raise RuntimeError("Unsloth: The number of LoRA adapaters was not calculated correctly!")
-
-    # Get LoRA scalings
-    import peft.tuners.lora.bnb
-    import peft.tuners.lora
-    peft_items = dir(peft.tuners.lora.bnb)
-    peft_items = [x for x in peft_items if x.startswith("Linear")]
-    exec(f"from peft.tuners.lora import ({', '.join(peft_items)})", locals(), globals())
-
-    Linear_LoRA_Layers = tuple([peft.tuners.lora.Linear,] + [eval(x) for x in peft_items])
-    count = 0
+    # Remove all previous forward hooks for gradient checkpointing
     for name, module in model.named_modules():
-        if isinstance(module, Linear_LoRA_Layers):
-            assert(name.startswith("base_model."))
-            name = name[len("base_model."):]
-            active_adapter = module.active_adapters[0] if \
-                hasattr(module, "active_adapters") else module.active_adapter
-            scaling = module.scaling[active_adapter]
-            lora_weights[name + ".weight"][2] = scaling
-            count += 1
+        if len(module._forward_hooks) != 0:
+            register_other_hooks(
+                "enable_input_require_grads",
+                "make_inputs_require_grad",
+                module,
+                "_forward_hooks",
+            )
         pass
     pass
-    if total_counted//2 != count:
-        raise RuntimeError("Unsloth: The number of LoRA adapaters was not calculated correctly!")
 
-    # Also model. might be repeated - remove them!
-    original_keys = list(lora_weights.keys())
-    for original_key in original_keys:
-        if original_key.startswith("model."):
-            lora_weights[original_key[len("model."):]] = lora_weights[original_key]
+    # Add post forward hook
+    def requires_grad_post_hook(module, input, output):
+        type_output = type(output)
+        if type_output is torch.Tensor:
+            output.requires_grad_(True)
+        else:
+            try:
+                # Output in huggingface generally a dataclass with loss, try to add to that
+                output.loss.requires_grad_(True)
+            except Exception as _:
+                raise RuntimeError("Unsloth: Failed to make output require gradients!")
     pass
 
-    # Only enable low_disk_space_usage for uploading
-    if upload_location is not None and low_disk_space_usage:
-        file_list = HfFileSystem().ls(model_name, detail = False)
-        file_list = [x for x in file_list if x.endswith(".safetensors")]
-        file_list = [x[len(model_name):].strip("/\\") for x in file_list if x.startswith(model_name)]
+    def requires_grad_pre_hook(module, input):
+        type_input = type(input)
+        if type_input is torch.Tensor:
+            input.requires_grad_(True)
+        elif type_input is tuple or type_input is list:
+            if len(input) == 0:
+                raise RuntimeError("Unsloth: Failed to make input require gradients!")
+                # print(f"  WARNING: Empty list input to {module.__class__.__name__}!") # 
+                # return
+            input[0].requires_grad_(True)
+        else:
+            raise RuntimeError("Unsloth: Failed to make input require gradients!")
+    pass
 
-        # Download other items that are not .safetensors
-        snapshot_download(
-            repo_id = model_name,
-            local_dir = save_location,
-            ignore_patterns = ["*.safetensors"] + ignore_files,
-        )
+    # Find 1st ever item which requires grad
+    param = None
+    for name, param in model.named_parameters():
+        if param.requires_grad: break
+    if param is None: return
 
-        for filename in ProgressBar(file_list, desc = "Unsloth: Merging weights into 16bit"):
-            hf_hub_download(
-                repo_id = model_name,
-                filename = filename,
-                repo_type = "model",
-                local_dir = save_location,
-            )
-            _merge_and_overwrite_lora(
-                save_location = save_location,
-                filename = filename,
-                lora_weights = lora_weights,
-            )
+    name = re.sub("\.([\d]{1,})\.", r"[\1].", name)
+    name_components = name.split(".")
 
-            if upload_location is not None:
-                location_to_file = os.path.join(save_location, filename)
-                hf_api.upload_file(
-                    path_or_fileobj = location_to_file,
-                    path_in_repo = filename,
-                    repo_id = upload_location,
-                    repo_type = "model",
-                    commit_message  = "(Trained with Unsloth)",
-                )
-                # Remove safetensors file
-                os.remove(location_to_file)
+    if len(name_components) == 0:
+        raise RuntimeError("Unsloth: Model has 0 layers?")
+
+    final_where = None
+    # Try getting previous parent module
+    for j in range(len(name_components)-1, 0, -1):
+        name_curr = name_components[j]
+        name_pre  = "model." + ".".join(name_components[:j])
+        # Disable [\d] since it fails in gradient checkpointing
+        if re.search(r"\[[\d]{1,}\]", name_pre): continue
+        module = eval(name_pre)
+        if hasattr(module, "forward"):
+            try: forward = inspect.getsource(module.forward)
+            except: continue
+
+            # Normal self.language_model(...)
+            if f"self.{name_curr}(" in forward:
+                final_where = j + 1
+                break
+
+            # Fix self.blocks[0] like in Qwen
+            module_list = re.sub(r"\[[\d]{1,}\]", "", name_curr)
+            if f"in self.{module_list}:" in forward:
+                final_where = j
+                break
             pass
         pass
+    pass
 
-        # Upload rest of files that are not safetensors
-        if upload_location is not None:
-            hf_api.upload_folder(
-                folder_path = save_location,
-                repo_id = upload_location,
-                repo_type = "model",
-                commit_message  = "(Trained with Unsloth)",
-                ignore_patterns = ["*.safetensors"] + ignore_files,
-            )
-            # Delete entire repo at the end!
-            shutil.rmtree(save_location, ignore_errors = True)
-        pass
-    else:
-        # Download entire repo in 1 call
-        snapshot_download(
-            repo_id = model_name,
-            local_dir = save_location,
-            ignore_patterns = ignore_files,
+    if final_where is None:
+        # Find all input embeddings and just set them all as a fallback!
+        # Add other hooks first
+        register_other_hooks(
+            "requires_grad_post_hook",
+            "requires_grad_post_hook",
+            module,
+            "_forward_hooks",
         )
+        module.register_forward_hook(requires_grad_post_hook)
+        return
+    pass
+    
+    module_name = "model." + ".".join(name_components[:final_where])
+    print(f"Unsloth: Making `{module_name}` require gradients")
+    module = eval(module_name)
 
-        file_list = os.listdir(save_location)
-        file_list = [x for x in file_list if x.endswith(".safetensors")]
-        for filename in ProgressBar(file_list, desc = "Unsloth: Merging weights into 16bit"):
-            _merge_and_overwrite_lora(
-                save_location = save_location,
-                filename = filename,
-                lora_weights = lora_weights,
+    still_need_patching = True
+    # Check if input_embeddings exists
+    if hasattr(module, "get_input_embeddings"):
+        # Use forward hook after Embedding() is called
+        try:
+            module = module.get_input_embeddings()
+            # Add other hooks first
+            register_other_hooks(
+                "requires_grad_post_hook",
+                "requires_grad_post_hook",
+                module,
+                "_forward_hooks",
             )
-        pass
+            module.register_forward_hook(requires_grad_post_hook)
+            still_need_patching = False
+        except:
+            # Not Implemented probably?
+            still_need_patching = True
+    pass
 
-        # Upload repo
-        if upload_location is not None:
-            hf_api.upload_folder(
-                folder_path = save_location,
-                repo_id = upload_location,
-                repo_type = "model",
-                commit_message  = "(Trained with Unsloth)",
-                ignore_patterns = ignore_files,
-            )
-        pass
+    if still_need_patching:
+        # Use forward pre hook before module is called
+        register_other_hooks(
+            "requires_grad_pre_hook",
+            "requires_grad_pre_hook",
+            module,
+            "_forward_pre_hooks",
+        )
+        module.register_forward_pre_hook(requires_grad_pre_hook)
     pass
 pass
 
 # Unsloth Zoo - Utilities for Unsloth
-# Copyright 2023-present Daniel Han-Chen & the Unsloth team. All rights reserved.
+# Copyright 2023-present Daniel Han-Chen, Michael Han-Chen & the Unsloth team. All rights reserved.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License as published by

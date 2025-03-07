@@ -1,5 +1,5 @@
 # Unsloth Zoo - Utilities for Unsloth
-# Copyright 2023-present Daniel Han-Chen & the Unsloth team. All rights reserved.
+# Copyright 2023-present Daniel Han-Chen, Michael Han-Chen & the Unsloth team. All rights reserved.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License as published by
@@ -49,6 +49,8 @@ IMAGE_TOKENS = [
 
 import torch
 from PIL import Image
+import base64
+from io import BytesIO
 import math
 import requests
 from typing import Union, Tuple
@@ -239,9 +241,10 @@ pass
 
 
 class UnslothVisionDataCollator:
-    __slots__ = "padding_token_ids", "dtype", "ignore_index", "processor"
+    # All Unsloth Zoo code licensed under LGPLv3
+    __slots__ = "padding_token_ids", "dtype", "ignore_index", "processor", "formatting_func"
 
-    def __init__(self, model, processor, ignore_index = -100):
+    def __init__(self, model, processor, formatting_func = None, ignore_index = -100):
         self.padding_token_ids = get_padding_tokens_ids(processor)
         self.dtype = _get_dtype(
             model.config.torch_dtype \
@@ -250,6 +253,7 @@ class UnslothVisionDataCollator:
         )
         self.ignore_index = ignore_index
         self.processor = processor
+        self.formatting_func = formatting_func
         return
     pass
 
@@ -258,7 +262,11 @@ class UnslothVisionDataCollator:
         # The issue is batch = self.processor( forces tensors to be returned and not None.
         texts  = []
         images = []
-        for example in examples:
+        
+        if self.formatting_func is not None:
+            examples = [self.formatting_func(example) for example in examples]
+        
+        for example in examples:    
             messages = example["messages"]
             message = self.processor.apply_chat_template(
                 messages,

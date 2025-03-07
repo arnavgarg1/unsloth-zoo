@@ -1,5 +1,5 @@
 # Unsloth Zoo - Utilities for Unsloth
-# Copyright 2023-present Daniel Han-Chen & the Unsloth team. All rights reserved.
+# Copyright 2023-present Daniel Han-Chen, Michael Han-Chen & the Unsloth team. All rights reserved.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License as published by
@@ -36,7 +36,7 @@ def mean_of_trained_tokens(model, eps = 1e-16):
     These include <|eot_id|>, <|start_header_id|>, <|end_header_id|>
     We reset them to the mean of the rest of the tokens
     """
-    # Code licensed under LGPL
+    # All Unsloth Zoo code licensed under LGPLv3
     embedding_matrix = model.get_input_embeddings ().weight.clone()
     lm_head_matrix   = model.get_output_embeddings().weight.clone()
 
@@ -80,7 +80,7 @@ def add_new_tokens(
     Smartly resizes the tokenizer and adds new tokens to the model.
     We also disregard untrained tokens by removing them from the mean calculation.
     """
-    # Code licensed under LGPL
+    # All Unsloth Zoo code licensed under LGPLv3
     assert(isinstance(new_tokens, (list, tuple)))
     assert(len(new_tokens) > 0)
     assert(method == "mean" or method == "interpolation")
@@ -204,7 +204,7 @@ def fix_untrained_tokens(model, tokenizer, train_dataset, IGNORED_TOKENIZER_NAME
     These include <|eot_id|>, <|start_header_id|>, <|end_header_id|>
     We reset them to the mean of the rest of the tokens
     """
-    # Code licensed under LGPL
+    # All Unsloth Zoo code licensed under LGPLv3
     embedding_matrix = model.get_input_embeddings ().weight
     lm_head_matrix   = model.get_output_embeddings().weight
     chat_template = getattr(tokenizer, "chat_template", None)
@@ -247,12 +247,23 @@ def fix_untrained_tokens(model, tokenizer, train_dataset, IGNORED_TOKENIZER_NAME
 
     # Combine both checks
     indicator_untrained = indicator_untrained1 & indicator_untrained2
-
-    # Remove pad token possibility
-    if hasattr(tokenizer, "pad_token_id"):
-        pad_token_id = tokenizer.pad_token_id
-        if pad_token_id is not None and pad_token_id < indicator_untrained.shape[0]:
-            indicator_untrained[pad_token_id] = False
+    
+    # Remove pad token and other important token possibilities
+    special_tokens = (
+        "bos_token",
+        "eos_token",
+        "unk_token",
+        "sep_token",
+        "pad_token",
+        "cls_token",
+        "mask_token",
+    )
+    for special_token in special_tokens:
+        if hasattr(tokenizer, special_token + "_id"):
+            token_id = eval(f"tokenizer.{special_token}_id")
+            if token_id is not None and token_id < indicator_untrained.shape[0]:
+                indicator_untrained[token_id] = False
+        pass
     pass
     
     where_untrained = torch.where(indicator_untrained)[0]
@@ -325,6 +336,7 @@ def fix_untrained_tokens(model, tokenizer, train_dataset, IGNORED_TOKENIZER_NAME
     if bad_not_trainable:
 
         final_bad_items = []
+        which_locations = []
 
         # Re-check the first 250, last 250 input_ids
         size_dataset = len(train_dataset)
@@ -334,7 +346,9 @@ def fix_untrained_tokens(model, tokenizer, train_dataset, IGNORED_TOKENIZER_NAME
             if "input_ids" in input_ids:
                 input_ids = input_ids["input_ids"]
                 for item in input_ids:
-                    if item in where_untrained_set: final_bad_items.append(item)
+                    if item in where_untrained_set:
+                        final_bad_items.append(item)
+                        which_locations.append(j)
             pass
         pass
 
@@ -345,7 +359,9 @@ def fix_untrained_tokens(model, tokenizer, train_dataset, IGNORED_TOKENIZER_NAME
             if "input_ids" in input_ids:
                 input_ids = input_ids["input_ids"]
                 for item in input_ids:
-                    if item in where_untrained_set: final_bad_items.append(item)
+                    if item in where_untrained_set:
+                        final_bad_items.append(item)
+                        which_locations.append(j)
             pass
         pass
 
@@ -359,7 +375,9 @@ def fix_untrained_tokens(model, tokenizer, train_dataset, IGNORED_TOKENIZER_NAME
                 if "input_ids" in input_ids:
                     input_ids = input_ids["input_ids"]
                     for item in input_ids:
-                        if item in where_untrained_set: final_bad_items.append(item)
+                        if item in where_untrained_set:
+                            final_bad_items.append(item)
+                            which_locations.append(j)
                 pass
             pass
 
@@ -370,15 +388,21 @@ def fix_untrained_tokens(model, tokenizer, train_dataset, IGNORED_TOKENIZER_NAME
                 if "input_ids" in input_ids:
                     input_ids = input_ids["input_ids"]
                     for item in input_ids:
-                        if item in where_untrained_set: final_bad_items.append(item)
+                        if item in where_untrained_set:
+                            final_bad_items.append(item)
+                            which_locations.append(j)
                 pass
             pass
             # Most likely false signal!
             if len(final_bad_items) == 0: return
         pass
 
+        token_ids = list(set(final_bad_items))
+        tokens = tokenizer.decode(token_ids)
         raise ValueError(
-            f'Unsloth: Untrained tokens of [{list(set(final_bad_items))}] found, but embed_tokens & lm_head not trainable, causing NaNs. '\
+            f'Unsloth: Untrained tokens in rows [{list(set(which_locations))}] found.\n'\
+            f"The token ids are [{token_ids}] and tokens are [{tokens}].\n"\
+            f"The issue is the embed_tokens & lm_head not trainable, which will cause NaNs. "\
             'Restart then add `embed_tokens` & `lm_head` to '\
             '`FastLanguageModel.get_peft_model(target_modules = [..., "embed_tokens", "lm_head",]). `'\
             'Are you using the `base` model? Instead, use the `instruct` version to silence this warning.',
@@ -432,6 +456,20 @@ def fix_untrained_tokens(model, tokenizer, train_dataset, IGNORED_TOKENIZER_NAME
 pass
 
 
+POSSIBLE_RESERVED_TOKENS = (
+    "<|finetune_right_pad_id|>", # Llama-3.1
+    "<pad>",                     # Mistral Nemo
+    "<|vision_pad|>",            # Qwen 2.5
+    "<|image_pad|>",             # Qwen 2.5
+    "<|video_pad|>",             # Qwen 2.5
+    "<|reserved",                # Llama-3
+    "<|placeholder",             # Phi-3
+    "[control",                  # Mistral type models
+    "|<EXTRA_TOKENS_",           # Molmo
+    "<SPECIAL_",                 # Pixtral
+    "<unused",                   # PaliGemma
+)
+
 @torch.inference_mode
 def patch_tokenizer(model, tokenizer):
     """
@@ -441,20 +479,7 @@ def patch_tokenizer(model, tokenizer):
         Check if pad_token is not the same as eos_token otherwise the loss will ignore it!!
         Fixes https://github.com/unslothai/unsloth/issues/5
     """
-    # Code licensed under LGPL
-    possible_reserved_tokens = (
-        "<|finetune_right_pad_id|>", # Llama-3.1
-        "<pad>",                     # Mistral Nemo
-        "<|vision_pad|>",            # Qwen 2.5
-        "<|image_pad|>",             # Qwen 2.5
-        "<|video_pad|>",             # Qwen 2.5
-        "<|reserved",                # Llama-3
-        "<|placeholder",             # Phi-3
-        "[control",                  # Mistral type models
-        "|<EXTRA_TOKENS_",           # Molmo
-        "<SPECIAL_",                 # Pixtral
-        "<unused",                   # PaliGemma
-    )
+    # All Unsloth Zoo code licensed under LGPLv3
     joiner = "\1\0=+=\0\1"
     number_repetitions = 3 - 1 # Number of reserved tokens needed
 
@@ -480,7 +505,7 @@ def patch_tokenizer(model, tokenizer):
         final_pad_token  = None
         final_good_match = False
 
-        for possible_reserved_token in possible_reserved_tokens:
+        for possible_reserved_token in POSSIBLE_RESERVED_TOKENS:
             possible_reserved_token = re.escape(possible_reserved_token)
             found = re.finditer(f"{possible_reserved_token}", all_added_tokens)
             first_match = None
@@ -576,7 +601,7 @@ def patch_tokenizer(model, tokenizer):
 pass
 
 # Unsloth Zoo - Utilities for Unsloth
-# Copyright 2023-present Daniel Han-Chen & the Unsloth team. All rights reserved.
+# Copyright 2023-present Daniel Han-Chen, Michael Han-Chen & the Unsloth team. All rights reserved.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License as published by

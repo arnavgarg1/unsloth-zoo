@@ -1,5 +1,5 @@
 # Unsloth Zoo - Utilities for Unsloth
-# Copyright 2023-present Daniel Han-Chen & the Unsloth team. All rights reserved.
+# Copyright 2023-present Daniel Han-Chen, Michael Han-Chen & the Unsloth team. All rights reserved.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License as published by
@@ -37,12 +37,14 @@ def fix_zero_training_loss(model, tokenizer, train_dataset):
     Sometimes the labels get masked by all -100s, causing the loss
     to be 0. We check for this!
     """
+    # All Unsloth Zoo code licensed under LGPLv3
     if isinstance(train_dataset, datasets.IterableDataset):
         # Skip the check since the code below assumes
         # an indexable dataset
         return
     
     if len(train_dataset) == 0: return
+
 
     row = train_dataset[0]
     if type(row) is dict and "labels" in row:
@@ -59,16 +61,25 @@ def fix_zero_training_loss(model, tokenizer, train_dataset):
         pass
 
         # Check ratio
-        if seen_bad / (seen_bad + seen_good) >= 0.9:
-            print(
-                "Unsloth: Most labels in your dataset are -100. Training losses will be all 0.\n"\
+        if seen_bad == 0 and seen_good == 0: return
+
+        elif seen_bad / (seen_bad + seen_good) == 1:
+            raise ZeroDivisionError(
+                "Unsloth: All labels in your dataset are -100. Training losses will be all 0.\n"\
                 "For example, are you sure you used `train_on_responses_only` correctly?\n"\
-                "Or did you mask our tokens incorrectly? Maybe this is intended?"
+                "Or did you mask our tokens incorrectly? Maybe this is intended?\n"\
+                "Maybe you're using a Llama chat template on a non Llama model for example?"
             )
-        pass
+        elif seen_bad / (seen_bad + seen_good) >= 0.9:
+            print(
+                "Unsloth: Nearly all labels in your dataset are -100. Training losses will be all 0.\n"\
+                "For example, are you sure you used `train_on_responses_only` correctly?\n"\
+                "Or did you mask our tokens incorrectly? Maybe this is intended?\n"\
+                "Maybe you're using a Llama chat template on a non Llama model for example?"
+            )
     pass
 pass
-
+            
 
 def get_max_steps(training_args, n_training_samples, train_dataset):
     # Approximately from https://github.com/huggingface/transformers/blob/main/src/transformers/trainer.py#L2092
@@ -128,7 +139,7 @@ def unsloth_train(trainer):
     2. Scaled down version of HF's trainer
     3. Much less feature complete
     """
-    # Code licensed under LGPL
+    # All Unsloth Zoo code licensed under LGPLv3
     assert(hasattr(trainer, "args"))
     assert(hasattr(trainer, "model"))
     assert(hasattr(trainer, "train_dataset"))
@@ -323,7 +334,7 @@ def unsloth_train(trainer):
 pass
 
 # Unsloth Zoo - Utilities for Unsloth
-# Copyright 2023-present Daniel Han-Chen & the Unsloth team. All rights reserved.
+# Copyright 2023-present Daniel Han-Chen, Michael Han-Chen & the Unsloth team. All rights reserved.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License as published by

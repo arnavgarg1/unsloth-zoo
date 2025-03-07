@@ -1,5 +1,5 @@
 # Unsloth Zoo - Utilities for Unsloth
-# Copyright 2023-present Daniel Han-Chen & the Unsloth team. All rights reserved.
+# Copyright 2023-present Daniel Han-Chen, Michael Han-Chen & the Unsloth team. All rights reserved.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License as published by
@@ -43,6 +43,7 @@ __all__ = [
 
 
 def patch_loss_functions(_fast_cross_entropy_loss, torch_compile = True):
+    # All Unsloth Zoo code licensed under LGPLv3
     try:
         import transformers.loss.loss_utils
     except:
@@ -74,6 +75,7 @@ def patch_loss_functions(_fast_cross_entropy_loss, torch_compile = True):
     def UnslothForCausalLMLoss(
         logits, labels, vocab_size: int, num_items_in_batch: int = None, ignore_index: int = -100, **kwargs
     ):
+        if labels is None: return None
         shift_logits = logits
         shift_labels = torch.empty_like(labels)
         shift_labels[..., :-1] = labels[..., 1:]
@@ -146,6 +148,7 @@ def fused_linear_cross_entropy(
     logit_softcapping  : float = 0,
     accuracy_threshold : str = "auto",
 ):
+    # All Unsloth Zoo code licensed under LGPLv3
     reduction = "sum" if num_items_in_batch is not None else "mean"
     if logit_softcapping == 0: logit_softcapping = None
     loss = linear_cross_entropy(
@@ -163,7 +166,7 @@ def fused_linear_cross_entropy(
 pass
 
 # Unsloth Zoo - Utilities for Unsloth
-# Copyright 2023-present Daniel Han-Chen & the Unsloth team. All rights reserved.
+# Copyright 2023-present Daniel Han-Chen, Michael Han-Chen & the Unsloth team. All rights reserved.
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License as published by
