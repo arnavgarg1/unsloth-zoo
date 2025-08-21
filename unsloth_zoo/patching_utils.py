@@ -103,6 +103,7 @@ def patch_torch_compile(debug = False, O3 = False, ignore_errors = True):
             compiled_autograd_verbose = False, # Produces too much code
             aot_joint_graph = False, # Produces too much code
             aot_graphs = False,  # Produces too much code
+            perf_hints = True, # Performance improvement hints
         )
         torch._dynamo.config.verbose = True
     else:
@@ -161,8 +162,13 @@ def patch_torch_compile(debug = False, O3 = False, ignore_errors = True):
         "config.cuda.enable_cuda_lto = True",
         "config.cuda.use_fast_math = True",
         f"config.cuda.compile_opt_level = {'-O2' if O3 else '-O1'}",
-        # Capture torch.arange(...), torch.zeros(...)
-        "config.capture_dynamic_output_shape_ops = True",
+        # See torch.compile, the missing manual
+        # https://docs.google.com/document/d/1y5CRfMLdwEoF1nTk9q8qEu1mgMUuUtvhklPKJ2emLU8
+        # f"config.emulate_precision_casts = {not debug}", # Force X.to(f32).to(f16) instead of X.to(f16)
+        # when setting to not debug aka True, we get errors on torch2.6 
+        # TypeError: ValueRangeAnalysis.to_dtype() got an unexpected keyword argument 'use_compute_types'
+        # this keyword exists in torch2.7.0 but not in torch2.6.0 so set to False until torch2.6.0 is deprecated.
+        "config.emulate_precision_casts = False", # Force X.to(f32).to(f16) instead of X.to(f16)
     ]
     # Torch dynamo arguments
     torch_dynamo_arguments = [
@@ -175,6 +181,15 @@ def patch_torch_compile(debug = False, O3 = False, ignore_errors = True):
         # FAILS for Gemma!
         "config.compiled_autograd = False", # New Torch 2.4 feature which can compile backwards passes
         # https://pytorch.org/tutorials/intermediate/compiled_autograd_tutorial.html
+        "config.recompile_limit = 32", # Increase recompile amounts to 32 - then will do eager
+        # f"config.fail_on_recompile_limit_hit = {not debug and ignore_errors}", # Ignore recompiles CANNOT be used in tandem with suppress_errors
+        "config.allow_unspec_int_on_nn_module = True", # Integers in modules will auto wrap torch.tensor(self.vocab_size)
+        f"config.optimize_ddp = {not debug}", # Optimizes DDP, but can error out so disable on debug
+        # Captures .item() for eg
+        # n_chunks = int(torch.ceil((torch.tensor(vocab_size) / 262144) * 8))
+        "config.capture_scalar_outputs = True",
+        # Capture torch.arange(...), torch.zeros(...)
+        "config.capture_dynamic_output_shape_ops = True",
     ]
     if not debug and ignore_errors:
         # Have to explicitly set it!
@@ -192,6 +207,36 @@ def patch_torch_compile(debug = False, O3 = False, ignore_errors = True):
     pass
 pass
 
+def get_model(model):
+    found_layers = False
+    x = model
+    while True:
+        if hasattr(x, "layers"):
+            found_layers = True
+            break
+        elif hasattr(x, "model"):
+            x = x.model
+        elif hasattr(x, "base_model"):
+            x = x.base_model
+        elif hasattr(x, "language_model"):
+            x = x.language_model
+        else:
+            break
+    pass
+    return x, found_layers
+pass
+
+
+def verify_and_set_device(module,):
+    """
+    Verify that all parameters of a module are on the same device.
+    """
+    set_of_devices = set(x.device for x in module.parameters())
+    if len(set_of_devices) > 1:
+        raise ValueError(f"Unsloth: All parameters of {module} should be on the same device")
+    device = set_of_devices.pop()
+    module._per_layer_device_index = device.index
+pass
 
 def patch_model_and_tokenizer(
     model,
@@ -244,17 +289,44 @@ def patch_model_and_tokenizer(
     if do_forced_float32:
         correct_dtype = torch.float16
         for name, module in model.named_modules():
-            if "down_proj" in name or "up_proj" in name or "gate_proj" in name:
-                exec(f"module.to(torch.float16)")
-            if "q_proj" in name or "k_proj" in name or "v_proj" in name or "o_proj" in name:
-                exec(f"module.to(torch.float16)")
+            if hasattr(module, "_pre_set_compute_dtype"):
+                setted_dtype = module._pre_set_compute_dtype
+            else:
+                setted_dtype = torch.float16
+            if "down_proj" in name or "up_proj" in name or "gate_proj" in name or "fc1" in name or "fc2" in name:
+                module.to(setted_dtype)
+            if "q_proj" in name or "k_proj" in name or "v_proj" in name or "o_proj" in name or "out_proj" in name:
+                module.to(setted_dtype)
             if "lm_head" in name or "embed_tokens" in name:
-                exec(f"module.to(torch.float16)")
-            if "norm" in name:
-                exec(f"module.to(torch.float32)")
-                assert(module.weight.dtype == torch.float32)
+                module.to(setted_dtype)
+            if "embed_tokens" in name or "patch_embedding" in name:
+                module.to(setted_dtype)
+            if name.endswith("norm") and hasattr(module, "weight"):
+                module.to(setted_dtype)
+            if "bias" in name:
+                module.to(setted_dtype)
             torch.cuda.empty_cache()
+
+        # Convert any remaining bfloat16 parameters
+        for name, param in model.named_parameters():
+            if hasattr(param, "_pre_set_compute_dtype"):
+                param.data = param.data.to(param._pre_set_compute_dtype)
+            elif param.dtype == torch.bfloat16:
+                param.data = param.data.to(torch.float16)
+
+        # Also convert buffers (like position embeddings)
+        for name, buffer in model.named_buffers():
+            if hasattr(buffer, "_pre_set_compute_dtype"):
+                buffer.data = buffer.data.to(buffer._pre_set_compute_dtype)
+            elif buffer.dtype == torch.bfloat16:
+                buffer.data = buffer.data.to(torch.float16)
         pass
+    pass
+
+    # Upcast ot downcast if explicitly set
+    for name, module in model.named_modules():
+        if hasattr(module, "_pre_set_compute_dtype"):
+            module.to(module._pre_set_compute_dtype)
     pass
 
     # Correct torch_dtype
@@ -279,23 +351,33 @@ def patch_model_and_tokenizer(
         try: setattr(m, "dtype", correct_dtype)
         except: pass
     pass
-    
+
     # Check all params and patch!
     for name, module in model.named_modules():
         if isinstance(module, (Bnb_Linear4bit, Peft_Linear4bit)):
             weight = module.weight
+            # Check if quant_state exists for vision models like unsloth/Llama-3.2-11B-Vision-Instruct-bnb-4bit, unsloth/granite-vision-3.2-2b
+            if not hasattr(weight, 'quant_state'):
+                print(f"Skipping {name}: no quant_state found")
+                continue
+
             quant_state = weight.quant_state
+
+            if hasattr(module, "_pre_set_compute_dtype"):
+                setted_dtype = module._pre_set_compute_dtype
+            else:
+                setted_dtype = correct_dtype
 
             if type(quant_state) is list:
                 # BnB seems to have float16 as default!
-                module.weight.quant_state[2] = correct_dtype # Cast to correct dtype
+                module.weight.quant_state[2] = setted_dtype # Cast to correct dtype
             else:
                 # https://github.com/TimDettmers/bitsandbytes/pull/763/files
-                quant_state.dtype = correct_dtype
+                quant_state.dtype = setted_dtype
             pass
 
             if hasattr(module, "compute_dtype"):
-                module.compute_dtype = correct_dtype
+                module.compute_dtype = setted_dtype
         pass
         # Downcast RoPE embedding to correct data type
         if downcast_rope and ((name.endswith("rotary_emb") or hasattr(module, "cos_cached"))):
@@ -308,7 +390,7 @@ def patch_model_and_tokenizer(
 
             elif hasattr(module, "short_cos_cached") and \
                 (module.short_cos_cached.dtype != correct_dtype):
-                
+
                 module.short_cos_cached = module.short_cos_cached.to(correct_dtype)
                 module.short_sin_cached = module.short_sin_cached.to(correct_dtype)
             pass
@@ -368,7 +450,7 @@ def patch_model_and_tokenizer(
         lm_head.weight = old_output_embedding if not is_tied else old_input_embedding
         lm_head.in_features  = lm_head.weight.shape[1]
         lm_head.out_features = lm_head.weight.shape[0]
-        
+
         lm_head.weight.requires_grad_(requires_grad)
         model.set_output_embeddings(lm_head)
         if hasattr(model, "lm_head"): model.lm_head = lm_head
@@ -377,6 +459,13 @@ def patch_model_and_tokenizer(
     # Must tie lm_head and embed_tokens if they are tied!
     # Otherwise error will occur on saving models ie use save_model
     if is_tied: model.tie_weights()
+
+    # For pipeline parallel models, we need to set the device for each layer for easier access later
+    x, found_layers = get_model(model)
+    if found_layers:
+        for layer in x.layers:
+            verify_and_set_device(layer)
+    pass
 
     # Clear deleted GPU items
     for _ in range(3):
@@ -452,7 +541,7 @@ def check_conversion_mappings(model, current_key_name_str, skip_modules):
     if hasattr(model_root_cls, "_checkpoint_conversion_mapping") and len(model_root_cls._checkpoint_conversion_mapping) > 0:
         # if this is true, then it means that we must be on transformers >=4.52.0 because conversion_mappings was added in 4.52.0
         # we cant know if the skip module naming convention is new or old
-        # but if we are supposed to skip this current_key_name_str, and it didn't pass 
+        # but if we are supposed to skip this current_key_name_str, and it didn't pass
         # (current_key_name_str in quantization_config.llm_int8_skip_modules)
         # then new transformers + new module hierarchy means it should not be skipped, ie no BC check needed
         # and new transformers + old module hierarchy means we still need to check to skip
@@ -600,9 +689,9 @@ if hasattr(transformers.integrations.bitsandbytes, "_replace_with_bnb_linear") a
     def add_score_code(match):
         indentation = match.group(1)  # Captured indentation
         line_content = match.group(2) # The line 'current_key_name.append(name)'
-        
+
         indented_breakpoint_code = "\n".join([f"{indentation}{line}" for line in score_code.splitlines()])
-        
+
         return f"{indentation}{line_content}\n{indented_breakpoint_code}"
 
     source = re.sub(pattern, add_score_code, source, flags=re.MULTILINE)
